@@ -35,37 +35,31 @@ exports.handler = function(event, context) {
     }
 
     var record = event.Records[0];
-    if (record.EventSource != "aws:sns") {
+    if (record.eventSource != "aws:ses") {
         context.fail("Error: this doesnt look like an SES Received message");
-        return;
-    } else if (record.Sns.Type != "Notification" || record.Sns.Subject != "Amazon SES Email Receipt Notification") {
-        context.fail("Error: this doesnt look like an SES Email Receipt Notification");
         return;
     }
 
-    var message = JSON.parse(record.Sns.Message);
+    var message = record.ses;
     if (message.mail.messageId == null) {
         context.fail("Error: mail.messageId is missing");
         return;
     } else if (message.content != null) {
         context.fail("Error: mail content is present - seems like this should be going through S3");
         return;
-    } else if (message.receipt.action.type != "S3") {
-        context.fail("Error: mail action is not S3!");
-        return;
-    } else if (!message.receipt.action.bucketName || !message.receipt.action.objectKeyPrefix || !message.receipt.action.objectKey) {
-        context.fail("Error: mail S3 details are missing");
+    } else if (message.receipt.action.type != "Lambda") {
+        context.fail("Error: mail action is not Lambda!");
         return;
     }
 
-    message.s3Url = "s3://" + message.receipt.action.bucketName + "/" + message.receipt.action.objectKey;
+    message.s3Url = "s3://" + config.attachmentsBucket + "/" + message.mail.messageId;
     if (config.debug) {
         console.log("Fetching message from " + message.s3Url);
     }
 
     s3.getObject({
-        Bucket: message.receipt.action.bucketName,
-        Key: message.receipt.action.objectKey,
+        Bucket: config.attachmentsBucket,
+        Key: message.mail.messageId,
     }, function(err, data) {
         if (err) {
             console.log(err);
@@ -79,13 +73,13 @@ exports.handler = function(event, context) {
             var deliveryRule = null;
             for (var rule in config.rules) {
                 var re = new RegExp(rule);
-                if (re.test(message.receipt.action.objectKeyPrefix)) {
+                if (re.test(message.mail.destination[0])) {
                     deliveryRule = config.rules[rule];
                     break;
                 }
             }
             if (deliveryRule === null) {
-                console.log("Skipped: No matching rule", message.receipt.action.objectKeyPrefix);
+                console.log("Skipped: No matching rule", message.mail.destination);
                 context.succeed("Skipped: No matching rule.");
                 return;
             }
